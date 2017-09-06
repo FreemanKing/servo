@@ -8,6 +8,7 @@ use cssparser::Parser;
 use parser::{Parse, ParserContext};
 use selectors::parser::SelectorParseError;
 use style_traits::{ParseError, StyleParseError};
+use super::Either;
 use values::computed::{Context, LengthOrPercentage as ComputedLengthOrPercentage};
 use values::computed::{Percentage as ComputedPercentage, ToComputedValue};
 use values::computed::transform::TimingFunction as ComputedTimingFunction;
@@ -254,3 +255,39 @@ impl ToComputedValue for TimingFunction {
         }
     }
 }
+
+/// The LengthOrPercentage type for transform function.
+/// According to the spec, the computed value of transform is as specified, but with relative
+/// lengths converted into absolute lengths. Therefore, we need to define a different
+/// LengthOrPercentage type for transform.
+// https://drafts.csswg.org/css-transforms/#transform-property
+#[cfg_attr(feature = "servo", derive(HeapSizeOf))]
+#[derive(Clone, Debug, PartialEq, ToCss)]
+pub struct TransformLengthOrPercentage(pub LengthOrPercentage);
+
+impl Parse for TransformLengthOrPercentage {
+    #[inline]
+    fn parse<'i, 't>(context: &ParserContext,
+                     input: &mut Parser<'i, 't>) -> Result<Self, ParseError<'i>> {
+        LengthOrPercentage::parse(context, input).map(TransformLengthOrPercentage)
+    }
+}
+
+/// The Length type for transform function.
+#[cfg_attr(feature = "servo", derive(HeapSizeOf))]
+#[derive(Clone, Debug, PartialEq, ToCss)]
+pub struct TransformLength(pub Length);
+
+impl Parse for TransformLength {
+    #[inline]
+    fn parse<'i, 't>(context: &ParserContext,
+                     input: &mut Parser<'i, 't>) -> Result<Self, ParseError<'i>> {
+        Length::parse(context, input).map(TransformLength)
+    }
+}
+
+/// <length> | <percentage> | <number> for transform.
+pub type TransformLengthOrPercentageOrNumber = Either<Number, TransformLengthOrPercentage>;
+
+/// <length> | <number> for transform.
+pub type TransformLengthOrNumber = Either<Number, TransformLength>;

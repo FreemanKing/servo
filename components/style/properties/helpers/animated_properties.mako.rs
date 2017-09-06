@@ -1243,16 +1243,16 @@ impl Animate for TransformOperation {
                 }
             },
             (
-                &TransformOperation::Perspective(ref fd),
-                &TransformOperation::Perspective(ref td),
+                &TransformOperation::Perspective(fd),
+                &TransformOperation::Perspective(td),
             ) => {
                 let mut fd_matrix = ComputedMatrix::identity();
                 let mut td_matrix = ComputedMatrix::identity();
-                if fd.0 > 0 {
-                    fd_matrix.m34 = -1. / fd.to_f32_px();
+                if fd > 0. {
+                    fd_matrix.m34 = -1. / fd;
                 }
-                if td.0 > 0 {
-                    td_matrix.m34 = -1. / td.to_f32_px();
+                if td > 0. {
+                    td_matrix.m34 = -1. / td;
                 }
                 Ok(TransformOperation::Matrix(
                     fd_matrix.animate(&td_matrix, procedure)?,
@@ -2309,29 +2309,10 @@ impl ComputeSquaredDistance for TransformOperation {
                 &TransformOperation::Translate(ref fx, ref fy, ref fz),
                 &TransformOperation::Translate(ref tx, ref ty, ref tz),
             ) => {
-                // We don't want to require doing layout in order to calculate the result, so
-                // drop the percentage part. However, dropping percentage makes us impossible to
-                // compute the distance for the percentage-percentage case, but Gecko uses the
-                // same formula, so it's fine for now.
-                // Note: We use pixel value to compute the distance for translate, so we have to
-                // convert Au into px.
-                let extract_pixel_length = |lop: &LengthOrPercentage| {
-                    match *lop {
-                        LengthOrPercentage::Length(au) => au.to_f64_px(),
-                        LengthOrPercentage::Percentage(_) => 0.,
-                        LengthOrPercentage::Calc(calc) => calc.length().to_f64_px(),
-                    }
-                };
-
-                let fx = extract_pixel_length(&fx);
-                let fy = extract_pixel_length(&fy);
-                let tx = extract_pixel_length(&tx);
-                let ty = extract_pixel_length(&ty);
-
                 Ok(
                     fx.compute_squared_distance(&tx)? +
                     fy.compute_squared_distance(&ty)? +
-                    fz.to_f64_px().compute_squared_distance(&tz.to_f64_px())?,
+                    fz.compute_squared_distance(&tz)?,
                 )
             },
             (
@@ -2363,30 +2344,30 @@ impl ComputeSquaredDistance for TransformOperation {
                 }
             }
             (
-                &TransformOperation::Perspective(ref fd),
-                &TransformOperation::Perspective(ref td),
+                &TransformOperation::Perspective(fd),
+                &TransformOperation::Perspective(td),
             ) => {
                 let mut fd_matrix = ComputedMatrix::identity();
                 let mut td_matrix = ComputedMatrix::identity();
-                if fd.0 > 0 {
-                    fd_matrix.m34 = -1. / fd.to_f32_px();
+                if fd > 0. {
+                    fd_matrix.m34 = -1. / fd;
                 }
 
-                if td.0 > 0 {
-                    td_matrix.m34 = -1. / td.to_f32_px();
+                if td > 0. {
+                    td_matrix.m34 = -1. / td;
                 }
                 fd_matrix.compute_squared_distance(&td_matrix)
             }
             (
-                &TransformOperation::Perspective(ref p),
+                &TransformOperation::Perspective(p),
                 &TransformOperation::Matrix(ref m),
             ) | (
                 &TransformOperation::Matrix(ref m),
-                &TransformOperation::Perspective(ref p),
+                &TransformOperation::Perspective(p),
             ) => {
                 let mut p_matrix = ComputedMatrix::identity();
-                if p.0 > 0 {
-                    p_matrix.m34 = -1. / p.to_f32_px();
+                if p > 0. {
+                    p_matrix.m34 = -1. / p;
                 }
                 p_matrix.compute_squared_distance(&m)
             }

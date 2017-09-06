@@ -101,10 +101,43 @@ impl FontBaseSize {
     }
 }
 
+/// Font reference size type.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum FontReferenceSize {
+    /// Represented as the normal font referent size.
+    Full(Au),
+    /// Represented as the case in which we cannot determine the size, so assumes 0.5em.
+    Half(Au),
+}
+
 impl FontRelativeLength {
-    /// Computes the font-relative length. We use the base_size
-    /// flag to pass a different size for computing font-size and unconstrained font-size
+    /// Computes the font-relative length.
     pub fn to_computed_value(&self, context: &Context, base_size: FontBaseSize) -> Au {
+        let (reference_size, length) = self.reference_font_size_and_length(context, base_size);
+        match reference_size {
+            FontReferenceSize::Full(au) => au.scale_by(length),
+            FontReferenceSize::Half(au) => au.scale_by(0.5 * length),
+        }
+    }
+
+    /// Computes the font-relative length, but as pixel value.
+    pub fn to_px(&self, context: &Context, base_size: FontBaseSize) -> CSSFloat {
+        use std::f32;
+        let (reference_size, length) = self.reference_font_size_and_length(context, base_size);
+        let pixel = match reference_size {
+            FontReferenceSize::Full(size) => length * size.to_f32_px(),
+            FontReferenceSize::Half(size) => length * 0.5 * size.to_f32_px(),
+        };
+        pixel.min(f32::MAX).max(f32::MIN)
+    }
+
+    /// Return reference font size. We use the base_size flag to pass a different size
+    /// for computing font-size and unconstrained font-size.
+    fn reference_font_size_and_length(
+        &self,
+        context: &Context,
+        base_size: FontBaseSize,
+    ) -> (FontReferenceSize, CSSFloat) {
         fn query_font_metrics(context: &Context, reference_font_size: Au) -> FontMetricsQueryResult {
             context.font_metrics_provider.query(context.style().get_font(),
                                                 reference_font_size,
@@ -116,22 +149,31 @@ impl FontRelativeLength {
         let reference_font_size = base_size.resolve(context);
 
         match *self {
-            FontRelativeLength::Em(length) => reference_font_size.scale_by(length),
+            FontRelativeLength::Em(length) => {
+                (FontReferenceSize::Full(reference_font_size), length)
+            },
             FontRelativeLength::Ex(length) => {
-                match query_font_metrics(context, reference_font_size) {
-                    FontMetricsQueryResult::Available(metrics) => metrics.x_height.scale_by(length),
+                let reference_size = match query_font_metrics(context, reference_font_size) {
+                    FontMetricsQueryResult::Available(metrics) => {
+                        FontReferenceSize::Full(metrics.x_height)
+                    },
                     // https://drafts.csswg.org/css-values/#ex
                     //
                     //     In the cases where it is impossible or impractical to
                     //     determine the x-height, a value of 0.5em must be
                     //     assumed.
                     //
-                    FontMetricsQueryResult::NotAvailable => reference_font_size.scale_by(0.5 * length),
-                }
+                    FontMetricsQueryResult::NotAvailable => {
+                        FontReferenceSize::Half(reference_font_size)
+                    },
+                };
+                (reference_size, length)
             },
             FontRelativeLength::Ch(length) => {
-                match query_font_metrics(context, reference_font_size) {
-                    FontMetricsQueryResult::Available(metrics) => metrics.zero_advance_measure.scale_by(length),
+                let reference_size = match query_font_metrics(context, reference_font_size) {
+                    FontMetricsQueryResult::Available(metrics) => {
+                        FontReferenceSize::Full(metrics.zero_advance_measure)
+                    },
                     // https://drafts.csswg.org/css-values/#ch
                     //
                     //     In the cases where it is impossible or impractical to
@@ -144,12 +186,13 @@ impl FontRelativeLength {
                     //
                     FontMetricsQueryResult::NotAvailable => {
                         if context.style().writing_mode.is_vertical() {
-                            reference_font_size.scale_by(length)
+                            FontReferenceSize::Full(reference_font_size)
                         } else {
-                            reference_font_size.scale_by(0.5 * length)
+                            FontReferenceSize::Half(reference_font_size)
                         }
                     }
-                }
+                };
+                (reference_size, length)
             }
             FontRelativeLength::Rem(length) => {
                 // https://drafts.csswg.org/css-values/#rem:
@@ -158,11 +201,12 @@ impl FontRelativeLength {
                 //     element, the rem units refer to the property’s initial
                 //     value.
                 //
-                if context.is_root_element {
-                    reference_font_size.scale_by(length)
+                let reference_size = if context.is_root_element {
+                    FontReferenceSize::Full(reference_font_size)
                 } else {
-                    context.device().root_font_size().scale_by(length)
-                }
+                    FontReferenceSize::Full(context.device().root_font_size())
+                };
+                (reference_size, length)
             }
         }
     }
@@ -198,13 +242,19 @@ impl ToCss for ViewportPercentageLength {
 impl ViewportPercentageLength {
     /// Computes the given viewport-relative length for the given viewport size.
     pub fn to_computed_value(&self, viewport_size: Size2D<Au>) -> Au {
+        Au::from_f32_px(self.to_px(viewport_size))
+    }
+
+    /// Computes the given viewport-relative length for the given viewport size,
+    /// and return a pixel value.
+    pub fn to_px(&self, viewport_size: Size2D<Au>) -> CSSFloat {
         macro_rules! to_unit {
             ($viewport_dimension:expr) => {
                 $viewport_dimension.to_f32_px() / 100.0
             }
         }
 
-        let value = match *self {
+        match *self {
             ViewportPercentageLength::Vw(length) =>
                 length * to_unit!(viewport_size.width),
             ViewportPercentageLength::Vh(length) =>
@@ -213,8 +263,7 @@ impl ViewportPercentageLength {
                 length * to_unit!(cmp::min(viewport_size.width, viewport_size.height)),
             ViewportPercentageLength::Vmax(length) =>
                 length * to_unit!(cmp::max(viewport_size.width, viewport_size.height)),
-        };
-        Au::from_f32_px(value)
+        }
     }
 }
 
@@ -281,6 +330,31 @@ impl AbsoluteLength {
             | AbsoluteLength::Pt(v)
             | AbsoluteLength::Pc(v) => v == 0.,
         }
+    }
+
+    /// Convert this into a pixel value.
+    #[inline]
+    pub fn to_px(&self) -> CSSFloat {
+        use std::f32;
+
+        const PX_PER_IN: CSSFloat = 96.;
+        const PX_PER_CM: CSSFloat = PX_PER_IN / 2.54;
+        const PX_PER_MM: CSSFloat = PX_PER_IN / 25.4;
+        const PX_PER_Q: CSSFloat = PX_PER_MM / 4.;
+        const PX_PER_PT: CSSFloat = PX_PER_IN / 72.;
+        const PX_PER_PC: CSSFloat = PX_PER_PT * 12.;
+
+        let pixel = match *self {
+            AbsoluteLength::Px(value) => value,
+            AbsoluteLength::In(value) => value * PX_PER_IN,
+            AbsoluteLength::Cm(value) => value * PX_PER_CM,
+            AbsoluteLength::Mm(value) => value * PX_PER_MM,
+            AbsoluteLength::Q(value) => value * PX_PER_Q,
+            AbsoluteLength::Pt(value) => value * PX_PER_PT,
+            AbsoluteLength::Pc(value) => value * PX_PER_PC,
+        };
+
+        pixel.min(f32::MAX).max(f32::MIN)
     }
 }
 
@@ -354,17 +428,24 @@ impl PhysicalLength {
 
     /// Computes the given character width.
     pub fn to_computed_value(&self, context: &Context) -> Au {
-        use gecko_bindings::bindings;
-        // Same as Gecko
-        const MM_PER_INCH: f32 = 25.4;
+        to_au_round(self.to_px(context), AU_PER_PX)
+    }
 
-        let physical_inch = unsafe {
-            bindings::Gecko_GetAppUnitsPerPhysicalInch(context.device().pres_context())
+    /// Computes the given character width and return its pixel value.
+    pub fn to_px(&self, context: &Context) -> CSSFloat {
+        use gecko_bindings::bindings;
+        use std::f32;
+
+        // Same as Gecko
+        const INCH_PER_MM: f32 = 1. / 25.4;
+        let au_per_physical_inch = unsafe {
+            bindings::Gecko_GetAppUnitsPerPhysicalInch(context.device().pres_context()) as f32
         };
 
-        let inch = self.0 / MM_PER_INCH;
-
-        to_au_round(inch, physical_inch as f32)
+        // (au/in) / (au/px) = px/in
+        let px_per_physical_inch = au_per_physical_inch / AU_PER_PX;
+        let px_per_mozmm = px_per_physical_inch * INCH_PER_MM;
+        self.0 * px_per_mozmm.min(f32::MAX).max(f32::MIN)
     }
 }
 
@@ -527,6 +608,26 @@ impl NoCalcLength {
     #[inline]
     pub fn from_px(px_value: CSSFloat) -> NoCalcLength {
         NoCalcLength::Absolute(AbsoluteLength::Px(px_value))
+    }
+
+    /// Convert this into an absolute pixel length.
+    #[inline]
+    pub fn to_px(&self, context: &Context) -> CSSFloat {
+        match *self {
+            NoCalcLength::Absolute(length) => length.to_px(),
+            NoCalcLength::FontRelative(length) => {
+                length.to_px(context, FontBaseSize::CurrentStyle)
+            },
+            NoCalcLength::ViewportPercentage(length) => {
+                length.to_px(context.viewport_size_for_viewport_unit_resolution())
+            },
+            /* This should only be reached from style dumping code */
+            NoCalcLength::ServoCharacterWidth(length) => {
+                length.to_computed_value(context.style().get_font().clone_font_size().0).to_f32_px()
+            },
+            #[cfg(feature = "gecko")]
+            NoCalcLength::Physical(length) => length.to_px(context),
+        }
     }
 }
 
